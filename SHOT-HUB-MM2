@@ -1,0 +1,777 @@
+-- SHOT HUB / MM2 • v2.8
+-- Меню + ESP + Fling (1000) + DropGun + Fling любого игрока
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+
+-- Настройки
+local espEnabled = false
+local espObjects = {}
+local menuVisible = true
+local autoPickupEnabled = false
+local autoPickupConnection = nil
+local lastPickupTime = 0
+local rememberedSheriff = nil
+local lastMurdererState = false
+local selectedFlingTarget = nil
+local flingDropdownOpen = false
+
+-- Цвета
+local Red = Color3.fromRGB(255, 0, 0)
+local Green = Color3.fromRGB(0, 255, 0)
+local Blue = Color3.fromRGB(0, 100, 255)
+local NeonRed = Color3.fromRGB(255, 50, 50)
+local NeonGreen = Color3.fromRGB(50, 255, 50)
+local NeonBlue = Color3.fromRGB(50, 100, 255)
+local Purple = Color3.fromRGB(180, 130, 255)
+local DarkBackground = Color3.fromRGB(20, 20, 25)
+local WhiteText = Color3.fromRGB(255, 255, 255)
+
+-- ========================== РОЛИ ==========================
+
+local function isPlayerCharacter(character)
+    if not character then return false end
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then return false end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return false end
+    return true
+end
+
+local function isMurderer(player)
+    local character = player.Character
+    if not character then return false end
+    if not isPlayerCharacter(character) then return false end
+    for _, child in pairs(character:GetChildren()) do
+        if child:IsA("Folder") then
+            return true
+        end
+    end
+    return false
+end
+
+local function findMurderer()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and isMurderer(player) then
+            return player
+        end
+    end
+    return nil
+end
+
+local function findSheriffByWeapon()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and not isMurderer(player) then
+            local backpack = player:FindFirstChild("Backpack")
+            if backpack then
+                for _, tool in pairs(backpack:GetChildren()) do
+                    local name = tool.Name:lower()
+                    if name:find("gun") or name:find("pistol") then
+                        return player
+                    end
+                end
+            end
+            
+            local character = player.Character
+            if character then
+                for _, tool in pairs(character:GetChildren()) do
+                    if tool:IsA("Tool") then
+                        local name = tool.Name:lower()
+                        if name:find("gun") or name:find("pistol") then
+                            return player
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function updateRememberedSheriff()
+    local murderer = findMurderer()
+    
+    if murderer then
+        local sheriff = findSheriffByWeapon()
+        if sheriff then
+            rememberedSheriff = sheriff
+            lastMurdererState = true
+        end
+    else
+        if lastMurdererState then
+            rememberedSheriff = nil
+            lastMurdererState = false
+        end
+    end
+end
+
+local function getSheriff()
+    local sheriff = findSheriffByWeapon()
+    if sheriff then
+        rememberedSheriff = sheriff
+        return sheriff
+    end
+    return rememberedSheriff
+end
+
+-- ========================== ESP ==========================
+
+local function getRole(player)
+    local character = player.Character
+    if not character then return "Unknown" end
+    
+    for _, child in pairs(character:GetChildren()) do
+        if child:IsA("Folder") then
+            return "Murderer"
+        end
+    end
+    
+    if rememberedSheriff == player then
+        return "Sheriff"
+    end
+    
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        for _, tool in pairs(backpack:GetChildren()) do
+            local name = tool.Name:lower()
+            if name:find("gun") or name:find("pistol") then
+                return "Sheriff"
+            end
+        end
+    end
+    
+    for _, tool in pairs(character:GetChildren()) do
+        if tool:IsA("Tool") then
+            local name = tool.Name:lower()
+            if name:find("gun") or name:find("pistol") then
+                return "Sheriff"
+            end
+        end
+    end
+    
+    return "Innocent"
+end
+
+local function removeESP(player)
+    if espObjects[player] then
+        if espObjects[player].Highlight then pcall(function() espObjects[player].Highlight:Destroy() end) end
+        if espObjects[player].Billboard then pcall(function() espObjects[player].Billboard:Destroy() end) end
+        espObjects[player] = nil
+    end
+end
+
+local function createESP(player)
+    if not player or player == LocalPlayer then return end
+    removeESP(player)
+    
+    local character = player.Character
+    if not character or not isPlayerCharacter(character) then return end
+    
+    local head = character:FindFirstChild("Head")
+    if not head then return end
+    
+    local role = getRole(player)
+    
+    local highlight = Instance.new("Highlight")
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0, 120, 0, 30)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = head
+    
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.TextStrokeTransparency = 0
+    textLabel.Font = Enum.Font.GothamBold
+    textLabel.TextSize = 16
+    
+    if role == "Murderer" then
+        highlight.FillColor = Red
+        highlight.OutlineColor = NeonRed
+        textLabel.Text = "🔪 MURDERER"
+        textLabel.TextColor3 = Red
+    elseif role == "Sheriff" then
+        highlight.FillColor = Blue
+        highlight.OutlineColor = NeonBlue
+        textLabel.Text = "🔫 SHERIFF"
+        textLabel.TextColor3 = Blue
+    else
+        highlight.FillColor = Green
+        highlight.OutlineColor = NeonGreen
+        textLabel.Text = "😇 INNOCENT"
+        textLabel.TextColor3 = Green
+    end
+    
+    highlight.Parent = character
+    textLabel.Parent = billboard
+    
+    espObjects[player] = {Highlight = highlight, Billboard = billboard}
+end
+
+local function clearAllESP()
+    for player in pairs(espObjects) do
+        removeESP(player)
+    end
+end
+
+local function scanPlayers()
+    updateRememberedSheriff()
+    clearAllESP()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local character = player.Character
+            if character and isPlayerCharacter(character) then
+                createESP(player)
+            end
+        end
+    end
+end
+
+local espConnection = nil
+local lastScanTime = 0
+
+local function startESP()
+    if espConnection then return end
+    espEnabled = true
+    scanPlayers()
+    espConnection = RunService.RenderStepped:Connect(function()
+        if not espEnabled then return end
+        if tick() - lastScanTime >= 5 then
+            scanPlayers()
+            lastScanTime = tick()
+        end
+    end)
+end
+
+local function stopESP()
+    espEnabled = false
+    if espConnection then
+        espConnection:Disconnect()
+        espConnection = nil
+    end
+    clearAllESP()
+end
+
+-- ========================== FLING (СКОРОСТЬ 1000) ==========================
+
+local function flingPlayer(targetPlayer)
+    if not targetPlayer then return end
+    
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    
+    if not root or not hum then return end
+    
+    local targetRoot = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return end
+    
+    local originalPos = root.CFrame
+    hum.PlatformStand = true
+    
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(1e7, 1e7, 1e7)
+    bv.Velocity = Vector3.new(99999, 99999, 99999)
+    bv.Parent = root
+    
+    local bav = Instance.new("BodyAngularVelocity")
+    bav.MaxTorque = Vector3.new(1e7, 1e7, 1e7)
+    bav.AngularVelocity = Vector3.new(0, 99999, 0)
+    bav.Parent = root
+    
+    local speed = 1000
+    local distance = 6
+    local startTime = os.clock()
+    local flingTime = 3
+    
+    while targetRoot and targetRoot.Parent and root and bv.Parent and os.clock() - startTime < flingTime do
+        local elapsed = os.clock() - startTime
+        local offset = math.sin(elapsed * speed) * distance
+        
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then part.CanCollide = false end
+        end
+        
+        root.CFrame = CFrame.new(targetRoot.Position) * CFrame.new(0, 0, offset) * CFrame.Angles(math.rad(90), 0, 0)
+        RunService.Heartbeat:Wait()
+    end
+    
+    pcall(function() bv:Destroy() end)
+    pcall(function() bav:Destroy() end)
+    hum.PlatformStand = false
+    
+    root.Velocity = Vector3.new(0, 0, 0)
+    root.RotVelocity = Vector3.new(0, 0, 0)
+    root.CFrame = originalPos
+    root.Velocity = Vector3.new(0, 0, 0)
+    root.RotVelocity = Vector3.new(0, 0, 0)
+    
+    local anchor = Instance.new("BodyVelocity")
+    anchor.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    anchor.Velocity = Vector3.new(0, 0, 0)
+    anchor.Parent = root
+    
+    task.wait(1)
+    pcall(function() anchor:Destroy() end)
+    
+    for _, part in ipairs(char:GetChildren()) do
+        if part:IsA("BasePart") then part.CanCollide = true end
+    end
+    
+    root.Velocity = Vector3.new(0, 0, 0)
+    root.RotVelocity = Vector3.new(0, 0, 0)
+end
+
+local function flingMurderer()
+    flingPlayer(findMurderer())
+end
+
+local function flingSheriff()
+    flingPlayer(getSheriff())
+end
+
+local function flingSelected()
+    flingPlayer(selectedFlingTarget)
+end
+
+-- ========================== DROPGUN ==========================
+
+local function findDropGun()
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        local name = obj.Name:lower()
+        
+        if name == "dropgun" or name == "drop gun" or name:find("dropgun") or name:find("drop_gun") or name:find("drop%-gun") then
+            return obj
+        end
+        
+        if obj:IsA("Tool") and name:find("dropgun") then
+            return obj
+        end
+        
+        if (obj:IsA("Part") or obj:IsA("MeshPart")) and name:find("dropgun") then
+            return obj
+        end
+        
+        if obj:IsA("Model") and name:find("dropgun") then
+            return obj
+        end
+    end
+    return nil
+end
+
+local function getDropGunPosition(dropGun)
+    if dropGun:IsA("Tool") then
+        local handle = dropGun:FindFirstChild("Handle") or dropGun:FindFirstChildOfClass("BasePart")
+        if handle then return handle.Position end
+    elseif dropGun:IsA("Model") then
+        local handle = dropGun:FindFirstChild("Handle") or dropGun:FindFirstChildOfClass("BasePart")
+        if handle then return handle.Position end
+        if dropGun.PrimaryPart then return dropGun.PrimaryPart.Position end
+    else
+        return dropGun.Position
+    end
+    return nil
+end
+
+local function pickupDropGun()
+    local char = LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local dropGun = findDropGun()
+    if not dropGun then return end
+    
+    local originalPos = root.CFrame
+    local targetPos = getDropGunPosition(dropGun)
+    
+    if targetPos then
+        root.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+        task.wait(0.5)
+        root.Velocity = Vector3.new(0, 0, 0)
+        root.CFrame = originalPos
+        root.Velocity = Vector3.new(0, 0, 0)
+    end
+end
+
+local function startAutoPickup()
+    if autoPickupConnection then return end
+    autoPickupEnabled = true
+    
+    autoPickupConnection = RunService.RenderStepped:Connect(function()
+        if not autoPickupEnabled then return end
+        
+        if tick() - lastPickupTime >= 0.5 then
+            lastPickupTime = tick()
+            
+            local dropGun = findDropGun()
+            if dropGun then
+                local char = LocalPlayer.Character
+                if char and char:FindFirstChild("HumanoidRootPart") then
+                    local root = char:FindFirstChild("HumanoidRootPart")
+                    local originalPos = root.CFrame
+                    local targetPos = getDropGunPosition(dropGun)
+                    
+                    if targetPos then
+                        root.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+                        task.wait(0.3)
+                        root.Velocity = Vector3.new(0, 0, 0)
+                        root.CFrame = originalPos
+                        root.Velocity = Vector3.new(0, 0, 0)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function stopAutoPickup()
+    autoPickupEnabled = false
+    if autoPickupConnection then
+        autoPickupConnection:Disconnect()
+        autoPickupConnection = nil
+    end
+end
+
+-- ========================== UI ==========================
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "ShotHub_MM2"
+ScreenGui.ResetOnSpawn = false
+pcall(function() ScreenGui.Parent = CoreGui end)
+if not ScreenGui.Parent then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 550, 0, 450)
+MainFrame.Position = UDim2.new(0.5, -275, 0.5, -225)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+MainFrame.BorderSizePixel = 0
+MainFrame.Visible = true
+MainFrame.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 12)
+MainCorner.Parent = MainFrame
+
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, -20, 0, 40)
+Header.Position = UDim2.new(0, 15, 0, 0)
+Header.BackgroundTransparency = 1
+Header.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Text = "SHOT HUB MM2"
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 18
+Title.TextColor3 = WhiteText
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Size = UDim2.new(0.5, 0, 1, 0)
+Title.BackgroundTransparency = 1
+Title.Parent = Header
+
+local Sidebar = Instance.new("Frame")
+Sidebar.Size = UDim2.new(0, 130, 1, -55)
+Sidebar.Position = UDim2.new(0, 15, 0, 45)
+Sidebar.BackgroundTransparency = 1
+Sidebar.Parent = MainFrame
+
+local SidebarLayout = Instance.new("UIListLayout")
+SidebarLayout.Padding = UDim.new(0, 6)
+SidebarLayout.Parent = Sidebar
+
+local Container = Instance.new("Frame")
+Container.Size = UDim2.new(1, -165, 1, -55)
+Container.Position = UDim2.new(0, 150, 0, 45)
+Container.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+Container.BorderSizePixel = 0
+Container.Parent = MainFrame
+
+local allTabs = {}
+local allPages = {}
+
+local function CreateTab(tabName, isDefault)
+    local TabBtn = Instance.new("TextButton")
+    TabBtn.Text = tabName
+    TabBtn.Size = UDim2.new(1, 0, 0, 32)
+    TabBtn.Font = Enum.Font.GothamMedium
+    TabBtn.TextSize = 13
+    TabBtn.BorderSizePixel = 0
+    TabBtn.Parent = Sidebar
+    
+    local Page = Instance.new("ScrollingFrame")
+    Page.Size = UDim2.new(1, -20, 1, -20)
+    Page.Position = UDim2.new(0, 10, 0, 10)
+    Page.BackgroundTransparency = 1
+    Page.BorderSizePixel = 0
+    Page.ScrollBarThickness = 2
+    Page.Visible = false
+    Page.Parent = Container
+    
+    local PageLayout = Instance.new("UIListLayout")
+    PageLayout.Padding = UDim.new(0, 8)
+    PageLayout.Parent = Page
+    
+    if isDefault then
+        TabBtn.BackgroundColor3 = Color3.fromRGB(35, 30, 45)
+        TabBtn.TextColor3 = Purple
+        Page.Visible = true
+    else
+        TabBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+        TabBtn.TextColor3 = Color3.fromRGB(140, 140, 150)
+    end
+    
+    TabBtn.MouseButton1Click:Connect(function()
+        for _, btn in ipairs(allTabs) do
+            btn.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+            btn.TextColor3 = Color3.fromRGB(140, 140, 150)
+        end
+        for _, pg in ipairs(allPages) do
+            pg.Visible = false
+        end
+        TabBtn.BackgroundColor3 = Color3.fromRGB(35, 30, 45)
+        TabBtn.TextColor3 = Purple
+        Page.Visible = true
+    end)
+    
+    table.insert(allTabs, TabBtn)
+    table.insert(allPages, Page)
+    return Page
+end
+
+local Home = CreateTab("Home", true)
+local Combat = CreateTab("Combat")
+local Visuals = CreateTab("Visuals")
+local Misc = CreateTab("Misc")
+
+local function CreateToggle(parent, text, callback)
+    local ToggleFrame = Instance.new("Frame")
+    ToggleFrame.Size = UDim2.new(1, 0, 0, 40)
+    ToggleFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    ToggleFrame.BorderSizePixel = 0
+    ToggleFrame.Parent = parent
+    
+    local ToggleLabel = Instance.new("TextLabel")
+    ToggleLabel.Size = UDim2.new(0.7, 0, 1, 0)
+    ToggleLabel.Position = UDim2.new(0, 10, 0, 0)
+    ToggleLabel.BackgroundTransparency = 1
+    ToggleLabel.Text = text
+    ToggleLabel.TextColor3 = WhiteText
+    ToggleLabel.Font = Enum.Font.Gotham
+    ToggleLabel.TextSize = 13
+    ToggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    ToggleLabel.Parent = ToggleFrame
+    
+    local SwitchButton = Instance.new("TextButton")
+    SwitchButton.Size = UDim2.new(0, 50, 0, 25)
+    SwitchButton.Position = UDim2.new(1, -60, 0.5, -12)
+    SwitchButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+    SwitchButton.BorderSizePixel = 0
+    SwitchButton.Text = ""
+    SwitchButton.AutoButtonColor = false
+    SwitchButton.Parent = ToggleFrame
+    
+    local SwitchKnob = Instance.new("Frame")
+    SwitchKnob.Size = UDim2.new(0, 20, 0, 20)
+    SwitchKnob.Position = UDim2.new(0, 2, 0.5, -10)
+    SwitchKnob.BackgroundColor3 = WhiteText
+    SwitchKnob.BorderSizePixel = 0
+    SwitchKnob.Parent = SwitchButton
+    
+    local isOn = false
+    
+    local function updateVisual()
+        if isOn then
+            SwitchButton.BackgroundColor3 = Purple
+            SwitchKnob.Position = UDim2.new(1, -22, 0.5, -10)
+        else
+            SwitchButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+            SwitchKnob.Position = UDim2.new(0, 2, 0.5, -10)
+        end
+    end
+    
+    SwitchButton.MouseButton1Click:Connect(function()
+        isOn = not isOn
+        updateVisual()
+        if callback then callback(isOn) end
+    end)
+    
+    updateVisual()
+    
+    return {
+        SetState = function(state) isOn = state updateVisual() end
+    }
+end
+
+local function CreateButton(parent, text, callback)
+    local Button = Instance.new("TextButton")
+    Button.Size = UDim2.new(1, 0, 0, 40)
+    Button.BackgroundColor3 = Purple
+    Button.BorderSizePixel = 0
+    Button.Text = text
+    Button.TextColor3 = WhiteText
+    Button.Font = Enum.Font.GothamBold
+    Button.TextSize = 13
+    Button.Parent = parent
+    
+    Button.MouseButton1Click:Connect(function()
+        if callback then callback() end
+    end)
+    
+    return Button
+end
+
+-- Home
+local HomeLabel = Instance.new("TextLabel")
+HomeLabel.Size = UDim2.new(1, 0, 0, 60)
+HomeLabel.BackgroundTransparency = 1
+HomeLabel.Text = "SHOT HUB MM2\nF - скрыть/показать меню"
+HomeLabel.TextColor3 = WhiteText
+HomeLabel.Font = Enum.Font.GothamBold
+HomeLabel.TextSize = 14
+HomeLabel.Parent = Home
+
+-- Combat
+CreateButton(Combat, "Fling Murderer (1000)", function()
+    flingMurderer()
+end)
+
+CreateButton(Combat, "Fling Sheriff (1000)", function()
+    flingSheriff()
+end)
+
+-- Выбор игрока для флинга
+local PlayerDropdown = Instance.new("TextButton")
+PlayerDropdown.Size = UDim2.new(1, 0, 0, 40)
+PlayerDropdown.BackgroundColor3 = DarkBackground
+PlayerDropdown.BorderSizePixel = 0
+PlayerDropdown.Text = "Select Player to Fling"
+PlayerDropdown.TextColor3 = WhiteText
+PlayerDropdown.Font = Enum.Font.Gotham
+PlayerDropdown.TextSize = 13
+PlayerDropdown.TextXAlignment = Enum.TextXAlignment.Left
+PlayerDropdown.Parent = Combat
+
+local PlayerList = Instance.new("ScrollingFrame")
+PlayerList.Size = UDim2.new(1, 0, 0, 150)
+PlayerList.BackgroundColor3 = DarkBackground
+PlayerList.BorderSizePixel = 0
+PlayerList.Visible = false
+PlayerList.ScrollBarThickness = 2
+PlayerList.Parent = Combat
+
+local function updatePlayerList()
+    for _, child in ipairs(PlayerList:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
+    
+    local yPos = 0
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local playerButton = Instance.new("TextButton")
+            playerButton.Size = UDim2.new(1, -10, 0, 35)
+            playerButton.Position = UDim2.new(0, 5, 0, yPos)
+            playerButton.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+            playerButton.BorderSizePixel = 0
+            playerButton.Text = player.Name
+            playerButton.TextColor3 = WhiteText
+            playerButton.Font = Enum.Font.Gotham
+            playerButton.TextSize = 13
+            playerButton.Parent = PlayerList
+            
+            playerButton.MouseButton1Click:Connect(function()
+                selectedFlingTarget = player
+                PlayerDropdown.Text = player.Name
+                PlayerList.Visible = false
+            end)
+            
+            yPos = yPos + 40
+        end
+    end
+    PlayerList.CanvasSize = UDim2.new(0, 0, 0, yPos)
+end
+
+PlayerDropdown.MouseButton1Click:Connect(function()
+    flingDropdownOpen = not flingDropdownOpen
+    PlayerList.Visible = flingDropdownOpen
+    if flingDropdownOpen then updatePlayerList() end
+end)
+
+CreateButton(Combat, "Fling Selected Player (1000)", function()
+    flingSelected()
+end)
+
+-- Visuals
+local espToggle = CreateToggle(Visuals, "ESP Players", function(state)
+    if state then startESP() else stopESP() end
+end)
+
+-- Misc
+CreateButton(Misc, "Pickup DropGun", function()
+    pickupDropGun()
+end)
+
+local autoPickupToggle = CreateToggle(Misc, "Auto Pickup DropGun", function(state)
+    if state then startAutoPickup() else stopAutoPickup() end
+end)
+
+-- Drag
+local dragging, dragStart, startPos
+Header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
+        local delta = input.Position - dragStart
+        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+-- F - меню
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    if input.KeyCode == Enum.KeyCode.F then
+        menuVisible = not menuVisible
+        MainFrame.Visible = menuVisible
+    end
+end)
+
+-- Обработчики
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        if espEnabled then
+            task.wait(0.5)
+            if player.Character and isPlayerCharacter(player.Character) then
+                createESP(player)
+            end
+        end
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    removeESP(player)
+    if rememberedSheriff == player then
+        rememberedSheriff = nil
+    end
+    if selectedFlingTarget == player then
+        selectedFlingTarget = nil
+        PlayerDropdown.Text = "Select Player to Fling"
+    end
+end)
+
+print("SHOT HUB MM2 loaded! F - меню")
