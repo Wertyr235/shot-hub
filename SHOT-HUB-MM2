@@ -1,8 +1,5 @@
--- SHOT HUB / MM2 • v3.1
--- Добавлены Speed, Jump Power, Fly, Noclip в Home
--- Добавлен Auto Coin Collect с Fly к монетам
--- Добавлен ESP монет
--- Исправлен полёт к монетам
+-- SHOT HUB / MM2 • v3.2
+-- Исправлены ESP монет и автосбор монет
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -140,7 +137,7 @@ local function getSheriff()
     return rememberedSheriff
 end
 
--- ========================== ESP ==========================
+-- ========================== ESP ИГРОКОВ ==========================
 
 local function getRole(player)
     local character = player.Character
@@ -281,13 +278,66 @@ local function stopESP()
     clearAllESP()
 end
 
--- ========================== ESP МОНЕТ ==========================
+-- ========================== ПОИСК МОНЕТ (ИСПРАВЛЕНО) ==========================
+
+local function findAllCoins()
+    local coins = {}
+    
+    -- Поиск по разным именам
+    for _, part in ipairs(Workspace:GetDescendants()) do
+        if part:IsA("BasePart") then
+            local partName = part.Name:lower()
+            if partName == "coin_server" or partName == "coin" or partName:find("coin") then
+                -- Проверяем, что это небольшая часть (монета)
+                if part.Size.Magnitude < 20 and part.Transparency < 0.8 then
+                    table.insert(coins, part)
+                end
+            end
+        end
+    end
+    
+    -- Дополнительный поиск в контейнерах
+    for _, container in ipairs(Workspace:GetChildren()) do
+        if container:IsA("Model") or container:IsA("Folder") then
+            if container.Name:lower():find("coin") then
+                for _, child in ipairs(container:GetDescendants()) do
+                    if child:IsA("BasePart") and child.Size.Magnitude < 20 then
+                        table.insert(coins, child)
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Убираем дубликаты
+    local uniqueCoins = {}
+    local seen = {}
+    for _, coin in ipairs(coins) do
+        if not seen[coin] then
+            seen[coin] = true
+            table.insert(uniqueCoins, coin)
+        end
+    end
+    
+    return uniqueCoins
+end
+
+-- ========================== ESP МОНЕТ (ИСПРАВЛЕНО) ==========================
 
 local function removeCoinESP(coin)
     if coinEspObjects[coin] then
-        if coinEspObjects[coin].Highlight then pcall(function() coinEspObjects[coin].Highlight:Destroy() end) end
-        if coinEspObjects[coin].Billboard then pcall(function() coinEspObjects[coin].Billboard:Destroy() end) end
-        if coinEspObjects[coin].Line then pcall(function() coinEspObjects[coin].Line:Destroy() end) end
+        if coinEspObjects[coin].Highlight then 
+            pcall(function() coinEspObjects[coin].Highlight:Destroy() end) 
+        end
+        if coinEspObjects[coin].Billboard then 
+            pcall(function() coinEspObjects[coin].Billboard:Destroy() end) 
+        end
+        if coinEspObjects[coin].Line then 
+            pcall(function() coinEspObjects[coin].Line:Destroy() end) 
+        end
+        if coinEspObjects[coin].LineConnection then
+            pcall(function() coinEspObjects[coin].LineConnection:Disconnect() end)
+        end
         coinEspObjects[coin] = nil
     end
 end
@@ -302,13 +352,15 @@ local function createCoinESP(coin)
     highlight.FillColor = Gold
     highlight.OutlineColor = Color3.fromRGB(255, 165, 0)
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.FillTransparency = 0.3
     highlight.Parent = coin
     
     -- Billboard над монетой
     local billboard = Instance.new("BillboardGui")
-    billboard.Size = UDim2.new(0, 80, 0, 25)
-    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.Size = UDim2.new(0, 100, 0, 30)
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
     billboard.AlwaysOnTop = true
+    billboard.Adornee = coin
     billboard.Parent = coin
     
     local textLabel = Instance.new("TextLabel")
@@ -317,25 +369,27 @@ local function createCoinESP(coin)
     textLabel.Text = "🪙 COIN"
     textLabel.TextColor3 = Gold
     textLabel.TextStrokeTransparency = 0
+    textLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     textLabel.Font = Enum.Font.GothamBold
-    textLabel.TextSize = 14
+    textLabel.TextSize = 16
     textLabel.Parent = billboard
     
-    -- Линия от монеты до игрока (для наглядности)
+    -- Линия от монеты до игрока
     local line = Instance.new("Part")
     line.Name = "CoinLine"
     line.Anchored = true
     line.CanCollide = false
-    line.Transparency = 0.5
+    line.Transparency = 0.3
     line.Material = Enum.Material.Neon
     line.Color = Gold
-    line.Size = Vector3.new(0.1, 0.1, 0.1)
-    line.Parent = coin
+    line.Size = Vector3.new(0.2, 0.2, 1)
+    line.Parent = Workspace
     
     -- Обновление линии
     local lineConnection = RunService.RenderStepped:Connect(function()
         if not coinEspEnabled or not coin or not coin.Parent then
             lineConnection:Disconnect()
+            pcall(function() line:Destroy() end)
             return
         end
         
@@ -348,12 +402,15 @@ local function createCoinESP(coin)
         local startPos = root.Position
         local endPos = coin.Position
         
-        -- Обновляем позицию и размер линии
-        local midPoint = (startPos + endPos) / 2
         local distance = (startPos - endPos).Magnitude
+        if distance < 1 or distance > 500 then
+            line.Transparency = 1
+            return
+        end
         
-        line.Size = Vector3.new(0.1, 0.1, distance)
-        line.CFrame = CFrame.new(midPoint, endPos) * CFrame.Angles(math.rad(90), 0, 0)
+        line.Transparency = 0.3
+        line.Size = Vector3.new(0.2, 0.2, distance)
+        line.CFrame = CFrame.lookAt(startPos, endPos) * CFrame.new(0, 0, -distance/2)
     end)
     
     coinEspObjects[coin] = {
@@ -373,13 +430,12 @@ end
 local function scanCoins()
     clearAllCoinESP()
     
-    for _, container in ipairs(Workspace:GetChildren()) do
-        if container:IsA("Model") and container.Name == "CoinContainer" then
-            for _, part in ipairs(container:GetChildren()) do
-                if part:IsA("BasePart") and part.Name == "Coin_Server" then
-                    createCoinESP(part)
-                end
-            end
+    local coins = findAllCoins()
+    print("[SHOT HUB] Найдено монет: " .. #coins)
+    
+    for _, coin in ipairs(coins) do
+        if coin and coin.Parent then
+            createCoinESP(coin)
         end
     end
 end
@@ -532,26 +588,8 @@ local function stopNoclip()
     end
 end
 
--- ========================== АВТОСБОР МОНЕТ ==========================
+-- ========================== АВТОСБОР МОНЕТ (ИСПРАВЛЕНО) ==========================
 
--- Найти все монеты в игре
-local function findAllCoins()
-    local coins = {}
-    
-    for _, container in ipairs(Workspace:GetChildren()) do
-        if container:IsA("Model") and container.Name == "CoinContainer" then
-            for _, part in ipairs(container:GetChildren()) do
-                if part:IsA("BasePart") and part.Name == "Coin_Server" then
-                    table.insert(coins, part)
-                end
-            end
-        end
-    end
-    
-    return coins
-end
-
--- Найти ближайшую монету
 local function findNearestCoin()
     local char = LocalPlayer.Character
     if not char then return nil end
@@ -573,10 +611,9 @@ local function findNearestCoin()
         end
     end
     
-    return nearest
+    return nearest, nearestDist
 end
 
--- Функция полёта к монете (ИСПРАВЛЕННАЯ)
 local function flyToCoin(coin, speed)
     if not coin or not coin.Parent then return end
     
@@ -584,112 +621,87 @@ local function flyToCoin(coin, speed)
     if not char then return end
     
     local root = char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not root or not hum then return end
     
     isFlyingToCoin = true
     currentCoinTarget = coin
     
     -- Сохраняем состояние
     local wasNoclipOn = noclipEnabled
-    local wasFlyOn = flyEnabled
     
-    -- Включаем noclip и fly принудительно
+    -- Включаем noclip для прохождения сквозь стены
     if not wasNoclipOn then
         startNoclip()
     end
     
-    if not wasFlyOn then
-        startFly()
-    end
-    
-    -- Ждём активации
-    task.wait(0.1)
-    
     local maxSpeed = speed or coinCollectSpeed
-    local stopDistance = 3
-    
-    -- Создаём BodyVelocity для движения к монете
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Velocity = Vector3.new(0, 0, 0)
-    bv.Parent = root
-    
-    -- Создаём BodyGyro для поворота к монете
-    local bg = Instance.new("BodyGyro")
-    bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    bg.D = 100
-    bg.P = 9000
-    bg.Parent = root
+    local stopDistance = 5
     
     local startTime = tick()
-    local timeout = 15
+    local timeout = 10
     
-    while coin and coin.Parent and isFlyingToCoin do
+    -- Основной цикл полёта
+    while coin and coin.Parent and isFlyingToCoin and tick() - startTime < timeout do
         if not char or not char.Parent then break end
         
         local currentRoot = char:FindFirstChild("HumanoidRootPart")
         if not currentRoot then break end
         
-        local direction = (coin.Position - currentRoot.Position).Unit
-        local distance = (currentRoot.Position - coin.Position).Magnitude
+        local direction = (coin.Position - currentRoot.Position)
+        local distance = direction.Magnitude
         
         -- Если близко к монете - останавливаемся
         if distance < stopDistance then
             break
         end
         
-        -- Двигаемся к монете с плавным ускорением
-        local speedMult = math.min(distance / 15, 1)
-        local currentSpeed = math.max(maxSpeed * speedMult, 5)
+        direction = direction.Unit
         
-        bv.Velocity = direction * currentSpeed
+        -- Плавное ускорение
+        local speedMult = math.clamp(distance / 20, 0.3, 1)
+        local currentSpeed = maxSpeed * speedMult
+        
+        -- Перемещаем персонажа
+        currentRoot.CFrame = currentRoot.CFrame + direction * currentSpeed * 0.1
+        currentRoot.Velocity = Vector3.new(0, 0, 0)
         
         -- Поворачиваем персонажа в сторону монеты
-        bg.CFrame = CFrame.new(currentRoot.Position, coin.Position)
+        currentRoot.CFrame = CFrame.lookAt(currentRoot.Position, coin.Position)
         
-        RunService.RenderStepped:Wait()
-        
-        if tick() - startTime > timeout then
-            break
-        end
+        task.wait(0.05)
     end
     
-    -- Очистка
-    pcall(function() bv:Destroy() end)
-    pcall(function() bg:Destroy() end)
+    isFlyingToCoin = false
+    currentCoinTarget = nil
     
+    -- Останавливаем персонажа
     if char and char:FindFirstChild("HumanoidRootPart") then
         local rootPart = char:FindFirstChild("HumanoidRootPart")
         rootPart.Velocity = Vector3.new(0, 0, 0)
         rootPart.RotVelocity = Vector3.new(0, 0, 0)
     end
     
-    isFlyingToCoin = false
-    currentCoinTarget = nil
-    
-    -- Возвращаем состояния
-    if not wasFlyOn then
-        stopFly()
-    end
-    
+    -- Возвращаем состояние noclip
     if not wasNoclipOn then
         stopNoclip()
     end
 end
 
--- Автосбор монет
 local function startAutoCoinCollect()
     if autoCoinCollectConnection then return end
     autoCoinCollectEnabled = true
     
-    autoCoinCollectConnection = RunService.RenderStepped:Connect(function()
+    autoCoinCollectConnection = RunService.Heartbeat:Connect(function()
         if not autoCoinCollectEnabled then return end
         
-        local coin = findNearestCoin()
-        if coin then
-            if not isFlyingToCoin then
-                flyToCoin(coin, coinCollectSpeed)
-            end
+        if isFlyingToCoin then return end
+        
+        local coin, distance = findNearestCoin()
+        if coin and distance and distance < 500 then
+            flyToCoin(coin, coinCollectSpeed)
+        else
+            task.wait(1) -- Подождать если монет нет рядом
         end
     end)
 end
@@ -1349,3 +1361,4 @@ Players.PlayerRemoving:Connect(function(player)
 end)
 
 print("SHOT HUB MM2 loaded! F - меню")
+print("Для отладки монет используйте: findAllCoins()")
