@@ -17,8 +17,6 @@ local AIM_KEY = Enum.UserInputType.MouseButton2
 
 -- ЧЕРНЫЙ СПИСОК ИГРОКОВ
 local BLACKLIST = {
-    "gggoww3",
-    "qwerty235113",
     "Player3",
 }
 
