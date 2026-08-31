@@ -1,6 +1,7 @@
 -- SHOT HUB / MM2 • v3.1
 -- Добавлены Speed, Jump Power, Fly, Noclip в Home
 -- Добавлен Auto Coin Collect с Fly к монетам
+-- Исправлен Drag (прилипание к мышке)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -396,7 +397,7 @@ local function stopNoclip()
     end
 end
 
--- ========================== АВТОСБОР МОНЕТ (НОВОЕ) ==========================
+-- ========================== АВТОСБОР МОНЕТ ==========================
 
 -- Найти все монеты в игре
 local function findAllCoins()
@@ -731,7 +732,7 @@ pcall(function() ScreenGui.Parent = CoreGui end)
 if not ScreenGui.Parent then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 550, 0, 600) -- Увеличил высоту
+MainFrame.Size = UDim2.new(0, 550, 0, 600)
 MainFrame.Position = UDim2.new(0.5, -275, 0.5, -300)
 MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 MainFrame.BorderSizePixel = 0
@@ -831,7 +832,7 @@ local Home = CreateTab("Home", true)
 local Combat = CreateTab("Combat")
 local Visuals = CreateTab("Visuals")
 local Misc = CreateTab("Misc")
-local Coins = CreateTab("Coins") -- Новая вкладка для монет
+local Coins = CreateTab("Coins")
 
 -- Слайдер
 local function CreateSlider(parent, text, min, max, default, callback)
@@ -1101,7 +1102,7 @@ local autoPickupToggle = CreateToggle(Misc, "Auto Pickup GunDrop", function(stat
     if state then startAutoPickup() else stopAutoPickup() end
 end)
 
--- ========================== COINS (НОВАЯ ВКЛАДКА) ==========================
+-- ========================== COINS ==========================
 
 -- Слайдер скорости полёта к монетам
 CreateSlider(Coins, "Coin Fly Speed", 5, 100, 30, function(value)
@@ -1125,24 +1126,55 @@ local autoCoinToggle = CreateToggle(Coins, "Auto Collect Coins", function(state)
     end
 end)
 
--- ========================== DRAG ==========================
+-- ========================== DRAG (ИСПРАВЛЕННЫЙ) ==========================
 
-local dragging, dragStart, startPos
+local dragging = false
+local dragInput = nil
+local dragStart = nil
+local startPos = nil
+
+local function updateDrag(input)
+    if not dragging then return end
+    
+    local delta = input.Position - dragStart
+    MainFrame.Position = UDim2.new(
+        startPos.X.Scale, 
+        startPos.X.Offset + delta.X, 
+        startPos.Y.Scale, 
+        startPos.Y.Offset + delta.Y
+    )
+end
+
 Header.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = true
         dragStart = input.Position
         startPos = MainFrame.Position
+        
         input.Changed:Connect(function()
-            if input.UserInputState == Enum.InputUserState.End then dragging = false end
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
         end)
     end
 end)
 
+Header.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+
 UserInputService.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
-        local delta = input.Position - dragStart
-        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    if input == dragInput and dragging then
+        updateDrag(input)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+        dragInput = nil
     end
 end)
 
