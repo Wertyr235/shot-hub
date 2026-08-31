@@ -1,7 +1,8 @@
 -- SHOT HUB / MM2 • v3.1
 -- Добавлены Speed, Jump Power, Fly, Noclip в Home
 -- Добавлен Auto Coin Collect с Fly к монетам
--- Исправлен Drag (прилипание к мышке)
+-- Добавлен ESP монет
+-- Исправлен полёт к монетам
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -32,9 +33,13 @@ local defaultJumpPower = 50
 -- НАСТРОЙКИ АВТОСБОРА МОНЕТ
 local autoCoinCollectEnabled = false
 local autoCoinCollectConnection = nil
-local coinCollectSpeed = 30 -- Скорость полёта к монетам (по умолчанию)
+local coinCollectSpeed = 30
 local currentCoinTarget = nil
 local isFlyingToCoin = false
+
+-- ESP МОНЕТ
+local coinEspEnabled = false
+local coinEspObjects = {}
 
 -- Цвета
 local Red = Color3.fromRGB(255, 0, 0)
@@ -46,6 +51,7 @@ local NeonBlue = Color3.fromRGB(50, 100, 255)
 local Purple = Color3.fromRGB(180, 130, 255)
 local DarkBackground = Color3.fromRGB(20, 20, 25)
 local WhiteText = Color3.fromRGB(255, 255, 255)
+local Gold = Color3.fromRGB(255, 215, 0)
 
 -- ========================== РОЛИ ==========================
 
@@ -275,6 +281,135 @@ local function stopESP()
     clearAllESP()
 end
 
+-- ========================== ESP МОНЕТ ==========================
+
+local function removeCoinESP(coin)
+    if coinEspObjects[coin] then
+        if coinEspObjects[coin].Highlight then pcall(function() coinEspObjects[coin].Highlight:Destroy() end) end
+        if coinEspObjects[coin].Billboard then pcall(function() coinEspObjects[coin].Billboard:Destroy() end) end
+        if coinEspObjects[coin].Line then pcall(function() coinEspObjects[coin].Line:Destroy() end) end
+        coinEspObjects[coin] = nil
+    end
+end
+
+local function createCoinESP(coin)
+    if not coin or not coin.Parent then return end
+    
+    removeCoinESP(coin)
+    
+    -- Highlight для монеты
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = Gold
+    highlight.OutlineColor = Color3.fromRGB(255, 165, 0)
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = coin
+    
+    -- Billboard над монетой
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0, 80, 0, 25)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = coin
+    
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = "🪙 COIN"
+    textLabel.TextColor3 = Gold
+    textLabel.TextStrokeTransparency = 0
+    textLabel.Font = Enum.Font.GothamBold
+    textLabel.TextSize = 14
+    textLabel.Parent = billboard
+    
+    -- Линия от монеты до игрока (для наглядности)
+    local line = Instance.new("Part")
+    line.Name = "CoinLine"
+    line.Anchored = true
+    line.CanCollide = false
+    line.Transparency = 0.5
+    line.Material = Enum.Material.Neon
+    line.Color = Gold
+    line.Size = Vector3.new(0.1, 0.1, 0.1)
+    line.Parent = coin
+    
+    -- Обновление линии
+    local lineConnection = RunService.RenderStepped:Connect(function()
+        if not coinEspEnabled or not coin or not coin.Parent then
+            lineConnection:Disconnect()
+            return
+        end
+        
+        local char = LocalPlayer.Character
+        if not char then return end
+        
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        
+        local startPos = root.Position
+        local endPos = coin.Position
+        
+        -- Обновляем позицию и размер линии
+        local midPoint = (startPos + endPos) / 2
+        local distance = (startPos - endPos).Magnitude
+        
+        line.Size = Vector3.new(0.1, 0.1, distance)
+        line.CFrame = CFrame.new(midPoint, endPos) * CFrame.Angles(math.rad(90), 0, 0)
+    end)
+    
+    coinEspObjects[coin] = {
+        Highlight = highlight,
+        Billboard = billboard,
+        Line = line,
+        LineConnection = lineConnection
+    }
+end
+
+local function clearAllCoinESP()
+    for coin in pairs(coinEspObjects) do
+        removeCoinESP(coin)
+    end
+end
+
+local function scanCoins()
+    clearAllCoinESP()
+    
+    for _, container in ipairs(Workspace:GetChildren()) do
+        if container:IsA("Model") and container.Name == "CoinContainer" then
+            for _, part in ipairs(container:GetChildren()) do
+                if part:IsA("BasePart") and part.Name == "Coin_Server" then
+                    createCoinESP(part)
+                end
+            end
+        end
+    end
+end
+
+local coinEspConnection = nil
+local lastCoinScanTime = 0
+
+local function startCoinESP()
+    if coinEspConnection then return end
+    coinEspEnabled = true
+    scanCoins()
+    
+    coinEspConnection = RunService.RenderStepped:Connect(function()
+        if not coinEspEnabled then return end
+        if tick() - lastCoinScanTime >= 3 then
+            scanCoins()
+            lastCoinScanTime = tick()
+        end
+    end)
+end
+
+local function stopCoinESP()
+    coinEspEnabled = false
+    if coinEspConnection then
+        coinEspConnection:Disconnect()
+        coinEspConnection = nil
+    end
+    clearAllCoinESP()
+end
+
 -- ========================== FLY ==========================
 
 local function startFly()
@@ -403,10 +538,8 @@ end
 local function findAllCoins()
     local coins = {}
     
-    -- Ищем все CoinContainer в Workspace
     for _, container in ipairs(Workspace:GetChildren()) do
         if container:IsA("Model") and container.Name == "CoinContainer" then
-            -- Внутри CoinContainer ищем Coin_Server
             for _, part in ipairs(container:GetChildren()) do
                 if part:IsA("BasePart") and part.Name == "Coin_Server" then
                     table.insert(coins, part)
@@ -443,7 +576,7 @@ local function findNearestCoin()
     return nearest
 end
 
--- Функция полёта к монете (скорость выбирается)
+-- Функция полёта к монете (ИСПРАВЛЕННАЯ)
 local function flyToCoin(coin, speed)
     if not coin or not coin.Parent then return end
     
@@ -456,34 +589,40 @@ local function flyToCoin(coin, speed)
     isFlyingToCoin = true
     currentCoinTarget = coin
     
-    -- Включаем noclip если выключен
+    -- Сохраняем состояние
     local wasNoclipOn = noclipEnabled
+    local wasFlyOn = flyEnabled
+    
+    -- Включаем noclip и fly принудительно
     if not wasNoclipOn then
         startNoclip()
     end
     
-    -- Включаем полёт если выключен
-    local wasFlyOn = flyEnabled
     if not wasFlyOn then
         startFly()
     end
     
-    -- Ждём пока активируются
+    -- Ждём активации
     task.wait(0.1)
     
-    -- Параметры полёта
     local maxSpeed = speed or coinCollectSpeed
-    local stopDistance = 3 -- Расстояние до монеты для остановки
+    local stopDistance = 3
     
-    -- BodyVelocity для управления
+    -- Создаём BodyVelocity для движения к монете
     local bv = Instance.new("BodyVelocity")
     bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
     bv.Velocity = Vector3.new(0, 0, 0)
     bv.Parent = root
     
-    -- Следим за монетой
+    -- Создаём BodyGyro для поворота к монете
+    local bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bg.D = 100
+    bg.P = 9000
+    bg.Parent = root
+    
     local startTime = tick()
-    local timeout = 10 -- Таймаут 10 секунд
+    local timeout = 15
     
     while coin and coin.Parent and isFlyingToCoin do
         if not char or not char.Parent then break end
@@ -499,19 +638,17 @@ local function flyToCoin(coin, speed)
             break
         end
         
-        -- Двигаемся к монете
-        local speedMult = math.min(distance / 10, 1) -- Ускорение если далеко
+        -- Двигаемся к монете с плавным ускорением
+        local speedMult = math.min(distance / 15, 1)
         local currentSpeed = math.max(maxSpeed * speedMult, 5)
         
         bv.Velocity = direction * currentSpeed
         
-        -- Поворачиваемся в сторону монеты (опционально)
-        local lookCFrame = CFrame.new(currentRoot.Position, coin.Position)
-        currentRoot.CFrame = CFrame.new(currentRoot.Position, coin.Position)
+        -- Поворачиваем персонажа в сторону монеты
+        bg.CFrame = CFrame.new(currentRoot.Position, coin.Position)
         
         RunService.RenderStepped:Wait()
         
-        -- Таймаут
         if tick() - startTime > timeout then
             break
         end
@@ -519,8 +656,8 @@ local function flyToCoin(coin, speed)
     
     -- Очистка
     pcall(function() bv:Destroy() end)
+    pcall(function() bg:Destroy() end)
     
-    -- Останавливаем персонажа
     if char and char:FindFirstChild("HumanoidRootPart") then
         local rootPart = char:FindFirstChild("HumanoidRootPart")
         rootPart.Velocity = Vector3.new(0, 0, 0)
@@ -530,7 +667,7 @@ local function flyToCoin(coin, speed)
     isFlyingToCoin = false
     currentCoinTarget = nil
     
-    -- Возвращаемся в исходное состояние (если не было включено ранее)
+    -- Возвращаем состояния
     if not wasFlyOn then
         stopFly()
     end
@@ -550,7 +687,6 @@ local function startAutoCoinCollect()
         
         local coin = findNearestCoin()
         if coin then
-            -- Проверяем, не летим ли уже к монете
             if not isFlyingToCoin then
                 flyToCoin(coin, coinCollectSpeed)
             end
@@ -569,7 +705,7 @@ local function stopAutoCoinCollect()
     end
 end
 
--- ========================== FLING (СКОРОСТЬ 1000) ==========================
+-- ========================== FLING ==========================
 
 local function flingPlayer(targetPlayer)
     if not targetPlayer then return end
@@ -1088,8 +1224,12 @@ end)
 
 -- ========================== VISUALS ==========================
 
-local espToggle = CreateToggle(Visuals, "ESP Players", function(state)
+CreateToggle(Visuals, "ESP Players", function(state)
     if state then startESP() else stopESP() end
+end)
+
+CreateToggle(Visuals, "ESP Coins", function(state)
+    if state then startCoinESP() else stopCoinESP() end
 end)
 
 -- ========================== MISC ==========================
@@ -1104,12 +1244,10 @@ end)
 
 -- ========================== COINS ==========================
 
--- Слайдер скорости полёта к монетам
 CreateSlider(Coins, "Coin Fly Speed", 5, 100, 30, function(value)
     coinCollectSpeed = value
 end)
 
--- Кнопка "Собрать все монеты" (один раз)
 CreateButton(Coins, "Collect All Coins (Once)", function()
     local coin = findNearestCoin()
     if coin then
@@ -1117,7 +1255,6 @@ CreateButton(Coins, "Collect All Coins (Once)", function()
     end
 end)
 
--- Автосбор монет
 local autoCoinToggle = CreateToggle(Coins, "Auto Collect Coins", function(state)
     if state then
         startAutoCoinCollect()
@@ -1126,7 +1263,7 @@ local autoCoinToggle = CreateToggle(Coins, "Auto Collect Coins", function(state)
     end
 end)
 
--- ========================== DRAG (ИСПРАВЛЕННЫЙ) ==========================
+-- ========================== DRAG ==========================
 
 local dragging = false
 local dragInput = nil
