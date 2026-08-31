@@ -1,5 +1,5 @@
--- SHOT HUB / MM2 • v2.8
--- Меню + ESP + Fling (1000) + DropGun + Fling любого игрока
+-- SHOT HUB / MM2 • v3.1
+-- Добавлены Speed, Jump Power, Fly, Noclip в Home
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -20,6 +20,12 @@ local rememberedSheriff = nil
 local lastMurdererState = false
 local selectedFlingTarget = nil
 local flingDropdownOpen = false
+local flyEnabled = false
+local flyConnection = nil
+local noclipEnabled = false
+local noclipConnection = nil
+local defaultWalkSpeed = 16
+local defaultJumpPower = 50
 
 -- Цвета
 local Red = Color3.fromRGB(255, 0, 0)
@@ -260,6 +266,128 @@ local function stopESP()
     clearAllESP()
 end
 
+-- ========================== FLY ==========================
+
+local function startFly()
+    if flyConnection then return end
+    
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    
+    if not root or not hum then return end
+    
+    flyEnabled = true
+    hum.PlatformStand = true
+    
+    local bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+    bodyVelocity.Parent = root
+    
+    local bodyGyro = Instance.new("BodyGyro")
+    bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bodyGyro.D = 100
+    bodyGyro.P = 9000
+    bodyGyro.Parent = root
+    
+    flyConnection = RunService.RenderStepped:Connect(function()
+        if not flyEnabled then return end
+        
+        local currentChar = LocalPlayer.Character
+        local currentRoot = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
+        if not currentRoot then return end
+        
+        local camera = Workspace.CurrentCamera
+        if camera then
+            bodyGyro.CFrame = camera.CFrame
+        end
+        
+        local moveDirection = Vector3.new(0, 0, 0)
+        
+        if camera then
+            local cameraCFrame = camera.CFrame
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDirection = moveDirection + cameraCFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDirection = moveDirection - cameraCFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDirection = moveDirection - cameraCFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDirection = moveDirection + cameraCFrame.RightVector end
+        end
+        
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDirection = moveDirection + Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDirection = moveDirection - Vector3.new(0, 1, 0) end
+        
+        if moveDirection.Magnitude > 0 then
+            moveDirection = moveDirection.Unit
+        end
+        
+        bodyVelocity.Velocity = moveDirection * 50
+    end)
+end
+
+local function stopFly()
+    flyEnabled = false
+    if flyConnection then
+        flyConnection:Disconnect()
+        flyConnection = nil
+    end
+    
+    local char = LocalPlayer.Character
+    if char then
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        
+        if root then
+            for _, child in ipairs(root:GetChildren()) do
+                if child:IsA("BodyVelocity") or child:IsA("BodyGyro") then
+                    child:Destroy()
+                end
+            end
+            root.Velocity = Vector3.new(0, 0, 0)
+        end
+        
+        if hum then
+            hum.PlatformStand = false
+        end
+    end
+end
+
+-- ========================== NOCLIP ==========================
+
+local function startNoclip()
+    if noclipConnection then return end
+    noclipEnabled = true
+    
+    noclipConnection = RunService.RenderStepped:Connect(function()
+        if not noclipEnabled then return end
+        
+        local char = LocalPlayer.Character
+        if char then
+            for _, part in ipairs(char:GetChildren()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+    end)
+end
+
+local function stopNoclip()
+    noclipEnabled = false
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
+    end
+    
+    local char = LocalPlayer.Character
+    if char then
+        for _, part in ipairs(char:GetChildren()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = true
+            end
+        end
+    end
+end
+
 -- ========================== FLING (СКОРОСТЬ 1000) ==========================
 
 local function flingPlayer(targetPlayer)
@@ -342,63 +470,41 @@ local function flingSelected()
     flingPlayer(selectedFlingTarget)
 end
 
--- ========================== DROPGUN ==========================
+-- ========================== GUNDROP ==========================
 
-local function findDropGun()
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        local name = obj.Name:lower()
-        
-        if name == "dropgun" or name == "drop gun" or name:find("dropgun") or name:find("drop_gun") or name:find("drop%-gun") then
-            return obj
-        end
-        
-        if obj:IsA("Tool") and name:find("dropgun") then
-            return obj
-        end
-        
-        if (obj:IsA("Part") or obj:IsA("MeshPart")) and name:find("dropgun") then
-            return obj
-        end
-        
-        if obj:IsA("Model") and name:find("dropgun") then
-            return obj
+local function findGunDropPart()
+    for _, model in ipairs(Workspace:GetDescendants()) do
+        if model:IsA("Model") then
+            local gunDropPart = model:FindFirstChild("GunDrop")
+            if gunDropPart and gunDropPart:IsA("BasePart") then
+                return gunDropPart
+            end
+            
+            for _, child in ipairs(model:GetChildren()) do
+                if child.Name == "GunDrop" and child:IsA("BasePart") then
+                    return child
+                end
+            end
         end
     end
     return nil
 end
 
-local function getDropGunPosition(dropGun)
-    if dropGun:IsA("Tool") then
-        local handle = dropGun:FindFirstChild("Handle") or dropGun:FindFirstChildOfClass("BasePart")
-        if handle then return handle.Position end
-    elseif dropGun:IsA("Model") then
-        local handle = dropGun:FindFirstChild("Handle") or dropGun:FindFirstChildOfClass("BasePart")
-        if handle then return handle.Position end
-        if dropGun.PrimaryPart then return dropGun.PrimaryPart.Position end
-    else
-        return dropGun.Position
-    end
-    return nil
-end
-
-local function pickupDropGun()
+local function pickupGunDrop()
     local char = LocalPlayer.Character
     if not char or not char:FindFirstChild("HumanoidRootPart") then return end
     
     local root = char:FindFirstChild("HumanoidRootPart")
-    local dropGun = findDropGun()
-    if not dropGun then return end
+    local gunDropPart = findGunDropPart()
+    
+    if not gunDropPart then return end
     
     local originalPos = root.CFrame
-    local targetPos = getDropGunPosition(dropGun)
-    
-    if targetPos then
-        root.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
-        task.wait(0.5)
-        root.Velocity = Vector3.new(0, 0, 0)
-        root.CFrame = originalPos
-        root.Velocity = Vector3.new(0, 0, 0)
-    end
+    root.CFrame = CFrame.new(gunDropPart.Position + Vector3.new(0, 3, 0))
+    task.wait(0.5)
+    root.Velocity = Vector3.new(0, 0, 0)
+    root.CFrame = originalPos
+    root.Velocity = Vector3.new(0, 0, 0)
 end
 
 local function startAutoPickup()
@@ -408,24 +514,20 @@ local function startAutoPickup()
     autoPickupConnection = RunService.RenderStepped:Connect(function()
         if not autoPickupEnabled then return end
         
-        if tick() - lastPickupTime >= 0.5 then
+        if tick() - lastPickupTime >= 1 then
             lastPickupTime = tick()
             
-            local dropGun = findDropGun()
-            if dropGun then
+            local gunDropPart = findGunDropPart()
+            if gunDropPart then
                 local char = LocalPlayer.Character
                 if char and char:FindFirstChild("HumanoidRootPart") then
                     local root = char:FindFirstChild("HumanoidRootPart")
                     local originalPos = root.CFrame
-                    local targetPos = getDropGunPosition(dropGun)
-                    
-                    if targetPos then
-                        root.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
-                        task.wait(0.3)
-                        root.Velocity = Vector3.new(0, 0, 0)
-                        root.CFrame = originalPos
-                        root.Velocity = Vector3.new(0, 0, 0)
-                    end
+                    root.CFrame = CFrame.new(gunDropPart.Position + Vector3.new(0, 3, 0))
+                    task.wait(0.3)
+                    root.Velocity = Vector3.new(0, 0, 0)
+                    root.CFrame = originalPos
+                    root.Velocity = Vector3.new(0, 0, 0)
                 end
             end
         end
@@ -449,8 +551,8 @@ pcall(function() ScreenGui.Parent = CoreGui end)
 if not ScreenGui.Parent then ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 550, 0, 450)
-MainFrame.Position = UDim2.new(0.5, -275, 0.5, -225)
+MainFrame.Size = UDim2.new(0, 550, 0, 500)
+MainFrame.Position = UDim2.new(0.5, -275, 0.5, -250)
 MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 MainFrame.BorderSizePixel = 0
 MainFrame.Visible = true
@@ -550,6 +652,73 @@ local Combat = CreateTab("Combat")
 local Visuals = CreateTab("Visuals")
 local Misc = CreateTab("Misc")
 
+-- Слайдер
+local function CreateSlider(parent, text, min, max, default, callback)
+    local SliderFrame = Instance.new("Frame")
+    SliderFrame.Size = UDim2.new(1, 0, 0, 50)
+    SliderFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+    SliderFrame.BorderSizePixel = 0
+    SliderFrame.Parent = parent
+    
+    local SliderLabel = Instance.new("TextLabel")
+    SliderLabel.Size = UDim2.new(1, -20, 0, 20)
+    SliderLabel.Position = UDim2.new(0, 10, 0, 0)
+    SliderLabel.BackgroundTransparency = 1
+    SliderLabel.Text = text .. ": " .. default
+    SliderLabel.TextColor3 = WhiteText
+    SliderLabel.Font = Enum.Font.Gotham
+    SliderLabel.TextSize = 12
+    SliderLabel.TextXAlignment = Enum.TextXAlignment.Left
+    SliderLabel.Parent = SliderFrame
+    
+    local SliderButton = Instance.new("TextButton")
+    SliderButton.Size = UDim2.new(1, -20, 0, 10)
+    SliderButton.Position = UDim2.new(0, 10, 0, 30)
+    SliderButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+    SliderButton.BorderSizePixel = 0
+    SliderButton.Text = ""
+    SliderButton.AutoButtonColor = false
+    SliderButton.Parent = SliderFrame
+    
+    local SliderFill = Instance.new("Frame")
+    SliderFill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
+    SliderFill.BackgroundColor3 = Purple
+    SliderFill.BorderSizePixel = 0
+    SliderFill.Parent = SliderButton
+    
+    local function updateSlider()
+        local mousePos = UserInputService:GetMouseLocation()
+        local sliderPos = SliderButton.AbsolutePosition
+        local sliderSize = SliderButton.AbsoluteSize
+        local relativeX = math.clamp((mousePos.X - sliderPos.X) / sliderSize.X, 0, 1)
+        local value = math.floor(min + relativeX * (max - min))
+        SliderFill.Size = UDim2.new(relativeX, 0, 1, 0)
+        SliderLabel.Text = text .. ": " .. value
+        if callback then callback(value) end
+    end
+    
+    local dragging = false
+    
+    SliderButton.MouseButton1Down:Connect(function()
+        dragging = true
+        updateSlider()
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            updateSlider()
+        end
+    end)
+    
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+    
+    return SliderFrame
+end
+
 local function CreateToggle(parent, text, callback)
     local ToggleFrame = Instance.new("Frame")
     ToggleFrame.Size = UDim2.new(1, 0, 0, 40)
@@ -627,17 +796,46 @@ local function CreateButton(parent, text, callback)
     return Button
 end
 
--- Home
-local HomeLabel = Instance.new("TextLabel")
-HomeLabel.Size = UDim2.new(1, 0, 0, 60)
-HomeLabel.BackgroundTransparency = 1
-HomeLabel.Text = "SHOT HUB MM2\nF - скрыть/показать меню"
-HomeLabel.TextColor3 = WhiteText
-HomeLabel.Font = Enum.Font.GothamBold
-HomeLabel.TextSize = 14
-HomeLabel.Parent = Home
+-- ========================== HOME ==========================
 
--- Combat
+CreateSlider(Home, "Walk Speed", 16, 200, 16, function(value)
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.WalkSpeed = value
+        end
+    end
+end)
+
+CreateSlider(Home, "Jump Power", 50, 300, 50, function(value)
+    local char = LocalPlayer.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.JumpPower = value
+        end
+    end
+end)
+
+CreateToggle(Home, "Fly", function(state)
+    if state then
+        startFly()
+    else
+        stopFly()
+    end
+end)
+
+CreateToggle(Home, "Noclip", function(state)
+    if state then
+        startNoclip()
+    else
+        stopNoclip()
+    end
+end)
+
+-- ========================== COMBAT ==========================
+
 CreateButton(Combat, "Fling Murderer (1000)", function()
     flingMurderer()
 end)
@@ -646,7 +844,6 @@ CreateButton(Combat, "Fling Sheriff (1000)", function()
     flingSheriff()
 end)
 
--- Выбор игрока для флинга
 local PlayerDropdown = Instance.new("TextButton")
 PlayerDropdown.Size = UDim2.new(1, 0, 0, 40)
 PlayerDropdown.BackgroundColor3 = DarkBackground
@@ -707,17 +904,19 @@ CreateButton(Combat, "Fling Selected Player (1000)", function()
     flingSelected()
 end)
 
--- Visuals
+-- ========================== VISUALS ==========================
+
 local espToggle = CreateToggle(Visuals, "ESP Players", function(state)
     if state then startESP() else stopESP() end
 end)
 
--- Misc
-CreateButton(Misc, "Pickup DropGun", function()
-    pickupDropGun()
+-- ========================== MISC ==========================
+
+CreateButton(Misc, "Pickup GunDrop", function()
+    pickupGunDrop()
 end)
 
-local autoPickupToggle = CreateToggle(Misc, "Auto Pickup DropGun", function(state)
+local autoPickupToggle = CreateToggle(Misc, "Auto Pickup GunDrop", function(state)
     if state then startAutoPickup() else stopAutoPickup() end
 end)
 
