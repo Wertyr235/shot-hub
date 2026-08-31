@@ -1,5 +1,5 @@
--- SHOT HUB / MM2 • v3.1
--- Добавлены Speed, Jump Power, Fly, Noclip в Home
+-- SHOT HUB / MM2 • v3.3
+-- Добавлен AutoFarm монет с статистикой
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -24,8 +24,14 @@ local flyEnabled = false
 local flyConnection = nil
 local noclipEnabled = false
 local noclipConnection = nil
-local defaultWalkSpeed = 16
-local defaultJumpPower = 50
+
+-- AutoFarm монет
+local coinFarmEnabled = false
+local coinFarmConnection = nil
+local coinsCollected = 0
+local coinsPerHour = 0
+local farmStartTime = 0
+local lastCoinUpdate = 0
 
 -- Цвета
 local Red = Color3.fromRGB(255, 0, 0)
@@ -35,6 +41,7 @@ local NeonRed = Color3.fromRGB(255, 50, 50)
 local NeonGreen = Color3.fromRGB(50, 255, 50)
 local NeonBlue = Color3.fromRGB(50, 100, 255)
 local Purple = Color3.fromRGB(180, 130, 255)
+local Gold = Color3.fromRGB(255, 200, 0)
 local DarkBackground = Color3.fromRGB(20, 20, 25)
 local WhiteText = Color3.fromRGB(255, 255, 255)
 
@@ -42,17 +49,14 @@ local WhiteText = Color3.fromRGB(255, 255, 255)
 
 local function isPlayerCharacter(character)
     if not character then return false end
-    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-    if not humanoidRootPart then return false end
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return false end
-    return true
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    local hum = character:FindFirstChildOfClass("Humanoid")
+    return hrp and hum
 end
 
 local function isMurderer(player)
     local character = player.Character
-    if not character then return false end
-    if not isPlayerCharacter(character) then return false end
+    if not character or not isPlayerCharacter(character) then return false end
     for _, child in pairs(character:GetChildren()) do
         if child:IsA("Folder") then
             return true
@@ -99,9 +103,8 @@ local function findSheriffByWeapon()
     return nil
 end
 
-local function updateRememberedSheriff()
+local function updateSheriff()
     local murderer = findMurderer()
-    
     if murderer then
         local sheriff = findSheriffByWeapon()
         if sheriff then
@@ -132,31 +135,23 @@ local function getRole(player)
     if not character then return "Unknown" end
     
     for _, child in pairs(character:GetChildren()) do
-        if child:IsA("Folder") then
-            return "Murderer"
-        end
+        if child:IsA("Folder") then return "Murderer" end
     end
     
-    if rememberedSheriff == player then
-        return "Sheriff"
-    end
+    if rememberedSheriff == player then return "Sheriff" end
     
     local backpack = player:FindFirstChild("Backpack")
     if backpack then
         for _, tool in pairs(backpack:GetChildren()) do
             local name = tool.Name:lower()
-            if name:find("gun") or name:find("pistol") then
-                return "Sheriff"
-            end
+            if name:find("gun") or name:find("pistol") then return "Sheriff" end
         end
     end
     
     for _, tool in pairs(character:GetChildren()) do
         if tool:IsA("Tool") then
             local name = tool.Name:lower()
-            if name:find("gun") or name:find("pistol") then
-                return "Sheriff"
-            end
+            if name:find("gun") or name:find("pistol") then return "Sheriff" end
         end
     end
     
@@ -165,8 +160,8 @@ end
 
 local function removeESP(player)
     if espObjects[player] then
-        if espObjects[player].Highlight then pcall(function() espObjects[player].Highlight:Destroy() end) end
-        if espObjects[player].Billboard then pcall(function() espObjects[player].Billboard:Destroy() end) end
+        pcall(function() espObjects[player].Highlight:Destroy() end)
+        pcall(function() espObjects[player].Billboard:Destroy() end)
         espObjects[player] = nil
     end
 end
@@ -222,21 +217,14 @@ local function createESP(player)
     espObjects[player] = {Highlight = highlight, Billboard = billboard}
 end
 
-local function clearAllESP()
+local function scanPlayers()
+    updateSheriff()
     for player in pairs(espObjects) do
         removeESP(player)
     end
-end
-
-local function scanPlayers()
-    updateRememberedSheriff()
-    clearAllESP()
     for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local character = player.Character
-            if character and isPlayerCharacter(character) then
-                createESP(player)
-            end
+        if player ~= LocalPlayer and player.Character and isPlayerCharacter(player.Character) then
+            createESP(player)
         end
     end
 end
@@ -259,25 +247,21 @@ end
 
 local function stopESP()
     espEnabled = false
-    if espConnection then
-        espConnection:Disconnect()
-        espConnection = nil
-    end
-    clearAllESP()
+    if espConnection then espConnection:Disconnect() espConnection = nil end
+    for player in pairs(espObjects) do removeESP(player) end
 end
 
 -- ========================== FLY ==========================
 
 local function startFly()
     if flyConnection then return end
+    flyEnabled = true
     
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     local hum = char and char:FindFirstChildOfClass("Humanoid")
-    
     if not root or not hum then return end
     
-    flyEnabled = true
     hum.PlatformStand = true
     
     local bodyVelocity = Instance.new("BodyVelocity")
@@ -299,55 +283,41 @@ local function startFly()
         if not currentRoot then return end
         
         local camera = Workspace.CurrentCamera
-        if camera then
-            bodyGyro.CFrame = camera.CFrame
-        end
+        if camera then bodyGyro.CFrame = camera.CFrame end
         
         local moveDirection = Vector3.new(0, 0, 0)
         
         if camera then
-            local cameraCFrame = camera.CFrame
-            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDirection = moveDirection + cameraCFrame.LookVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDirection = moveDirection - cameraCFrame.LookVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDirection = moveDirection - cameraCFrame.RightVector end
-            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDirection = moveDirection + cameraCFrame.RightVector end
+            local cf = camera.CFrame
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDirection += cf.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDirection -= cf.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDirection -= cf.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDirection += cf.RightVector end
         end
         
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDirection = moveDirection + Vector3.new(0, 1, 0) end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDirection = moveDirection - Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDirection += Vector3.new(0, 1, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDirection -= Vector3.new(0, 1, 0) end
         
-        if moveDirection.Magnitude > 0 then
-            moveDirection = moveDirection.Unit
-        end
-        
+        if moveDirection.Magnitude > 0 then moveDirection = moveDirection.Unit end
         bodyVelocity.Velocity = moveDirection * 50
     end)
 end
 
 local function stopFly()
     flyEnabled = false
-    if flyConnection then
-        flyConnection:Disconnect()
-        flyConnection = nil
-    end
+    if flyConnection then flyConnection:Disconnect() flyConnection = nil end
     
     local char = LocalPlayer.Character
     if char then
         local root = char:FindFirstChild("HumanoidRootPart")
         local hum = char:FindFirstChildOfClass("Humanoid")
-        
         if root then
             for _, child in ipairs(root:GetChildren()) do
-                if child:IsA("BodyVelocity") or child:IsA("BodyGyro") then
-                    child:Destroy()
-                end
+                if child:IsA("BodyVelocity") or child:IsA("BodyGyro") then child:Destroy() end
             end
             root.Velocity = Vector3.new(0, 0, 0)
         end
-        
-        if hum then
-            hum.PlatformStand = false
-        end
+        if hum then hum.PlatformStand = false end
     end
 end
 
@@ -359,13 +329,10 @@ local function startNoclip()
     
     noclipConnection = RunService.RenderStepped:Connect(function()
         if not noclipEnabled then return end
-        
         local char = LocalPlayer.Character
         if char then
             for _, part in ipairs(char:GetChildren()) do
-                if part:IsA("BasePart") then
-                    part.CanCollide = false
-                end
+                if part:IsA("BasePart") then part.CanCollide = false end
             end
         end
     end)
@@ -373,22 +340,17 @@ end
 
 local function stopNoclip()
     noclipEnabled = false
-    if noclipConnection then
-        noclipConnection:Disconnect()
-        noclipConnection = nil
-    end
+    if noclipConnection then noclipConnection:Disconnect() noclipConnection = nil end
     
     local char = LocalPlayer.Character
     if char then
         for _, part in ipairs(char:GetChildren()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = true
-            end
+            if part:IsA("BasePart") then part.CanCollide = true end
         end
     end
 end
 
--- ========================== FLING (СКОРОСТЬ 1000) ==========================
+-- ========================== FLING ==========================
 
 local function flingPlayer(targetPlayer)
     if not targetPlayer then return end
@@ -396,7 +358,6 @@ local function flingPlayer(targetPlayer)
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     local hum = char and char:FindFirstChildOfClass("Humanoid")
-    
     if not root or not hum then return end
     
     local targetRoot = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
@@ -415,7 +376,7 @@ local function flingPlayer(targetPlayer)
     bav.AngularVelocity = Vector3.new(0, 99999, 0)
     bav.Parent = root
     
-    local speed = 30
+    local speed = 1000
     local distance = 6
     local startTime = os.clock()
     local flingTime = 3
@@ -458,87 +419,83 @@ local function flingPlayer(targetPlayer)
     root.RotVelocity = Vector3.new(0, 0, 0)
 end
 
-local function flingMurderer()
-    flingPlayer(findMurderer())
-end
-
-local function flingSheriff()
-    flingPlayer(getSheriff())
-end
-
-local function flingSelected()
-    flingPlayer(selectedFlingTarget)
-end
-
 -- ========================== GUNDROP ==========================
 
 local function findGunDropPart()
     for _, model in ipairs(Workspace:GetDescendants()) do
         if model:IsA("Model") then
             local gunDropPart = model:FindFirstChild("GunDrop")
-            if gunDropPart and gunDropPart:IsA("BasePart") then
-                return gunDropPart
-            end
-            
-            for _, child in ipairs(model:GetChildren()) do
-                if child.Name == "GunDrop" and child:IsA("BasePart") then
-                    return child
-                end
-            end
+            if gunDropPart and gunDropPart:IsA("BasePart") then return gunDropPart end
         end
     end
     return nil
 end
 
-local function pickupGunDrop()
-    local char = LocalPlayer.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
-    
-    local root = char:FindFirstChild("HumanoidRootPart")
-    local gunDropPart = findGunDropPart()
-    
-    if not gunDropPart then return end
-    
-    local originalPos = root.CFrame
-    root.CFrame = CFrame.new(gunDropPart.Position + Vector3.new(0, 3, 0))
-    task.wait(0.5)
-    root.Velocity = Vector3.new(0, 0, 0)
-    root.CFrame = originalPos
-    root.Velocity = Vector3.new(0, 0, 0)
-end
+-- ========================== COIN FARM ==========================
 
-local function startAutoPickup()
-    if autoPickupConnection then return end
-    autoPickupEnabled = true
-    
-    autoPickupConnection = RunService.RenderStepped:Connect(function()
-        if not autoPickupEnabled then return end
-        
-        if tick() - lastPickupTime >= 1 then
-            lastPickupTime = tick()
-            
-            local gunDropPart = findGunDropPart()
-            if gunDropPart then
-                local char = LocalPlayer.Character
-                if char and char:FindFirstChild("HumanoidRootPart") then
-                    local root = char:FindFirstChild("HumanoidRootPart")
-                    local originalPos = root.CFrame
-                    root.CFrame = CFrame.new(gunDropPart.Position + Vector3.new(0, 3, 0))
-                    task.wait(0.3)
-                    root.Velocity = Vector3.new(0, 0, 0)
-                    root.CFrame = originalPos
-                    root.Velocity = Vector3.new(0, 0, 0)
+local function findCoinParts()
+    local coins = {}
+    for _, model in ipairs(Workspace:GetDescendants()) do
+        if model:IsA("Model") and model.Name == "CoinContainer" then
+            for _, child in ipairs(model:GetChildren()) do
+                if child.Name == "Coin_Server" and child:IsA("BasePart") then
+                    table.insert(coins, child)
                 end
             end
         end
+    end
+    return coins
+end
+
+local function collectCoin(coinPart)
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    
+    root.CFrame = CFrame.new(coinPart.Position + Vector3.new(0, 3, 0))
+    coinsCollected += 1
+    task.wait(0.1)
+end
+
+local function startCoinFarm()
+    if coinFarmConnection then return end
+    coinFarmEnabled = true
+    coinsCollected = 0
+    farmStartTime = tick()
+    lastCoinUpdate = tick()
+    
+    -- Включаем noclip
+    if not noclipEnabled then startNoclip() end
+    
+    coinFarmConnection = RunService.RenderStepped:Connect(function()
+        if not coinFarmEnabled then return end
+        
+        local coins = findCoinParts()
+        if #coins > 0 then
+            for _, coin in ipairs(coins) do
+                if not coinFarmEnabled then break end
+                collectCoin(coin)
+            end
+        end
+        
+        -- Обновляем статистику
+        if tick() - lastCoinUpdate >= 1 then
+            local elapsedHours = (tick() - farmStartTime) / 3600
+            if elapsedHours > 0 then
+                coinsPerHour = math.floor(coinsCollected / elapsedHours)
+            end
+            lastCoinUpdate = tick()
+        end
+        
+        task.wait(0.5)
     end)
 end
 
-local function stopAutoPickup()
-    autoPickupEnabled = false
-    if autoPickupConnection then
-        autoPickupConnection:Disconnect()
-        autoPickupConnection = nil
+local function stopCoinFarm()
+    coinFarmEnabled = false
+    if coinFarmConnection then
+        coinFarmConnection:Disconnect()
+        coinFarmConnection = nil
     end
 end
 
@@ -634,9 +591,7 @@ local function CreateTab(tabName, isDefault)
             btn.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
             btn.TextColor3 = Color3.fromRGB(140, 140, 150)
         end
-        for _, pg in ipairs(allPages) do
-            pg.Visible = false
-        end
+        for _, pg in ipairs(allPages) do pg.Visible = false end
         TabBtn.BackgroundColor3 = Color3.fromRGB(35, 30, 45)
         TabBtn.TextColor3 = Purple
         Page.Visible = true
@@ -651,73 +606,6 @@ local Home = CreateTab("Home", true)
 local Combat = CreateTab("Combat")
 local Visuals = CreateTab("Visuals")
 local Misc = CreateTab("Misc")
-
--- Слайдер
-local function CreateSlider(parent, text, min, max, default, callback)
-    local SliderFrame = Instance.new("Frame")
-    SliderFrame.Size = UDim2.new(1, 0, 0, 50)
-    SliderFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-    SliderFrame.BorderSizePixel = 0
-    SliderFrame.Parent = parent
-    
-    local SliderLabel = Instance.new("TextLabel")
-    SliderLabel.Size = UDim2.new(1, -20, 0, 20)
-    SliderLabel.Position = UDim2.new(0, 10, 0, 0)
-    SliderLabel.BackgroundTransparency = 1
-    SliderLabel.Text = text .. ": " .. default
-    SliderLabel.TextColor3 = WhiteText
-    SliderLabel.Font = Enum.Font.Gotham
-    SliderLabel.TextSize = 12
-    SliderLabel.TextXAlignment = Enum.TextXAlignment.Left
-    SliderLabel.Parent = SliderFrame
-    
-    local SliderButton = Instance.new("TextButton")
-    SliderButton.Size = UDim2.new(1, -20, 0, 10)
-    SliderButton.Position = UDim2.new(0, 10, 0, 30)
-    SliderButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-    SliderButton.BorderSizePixel = 0
-    SliderButton.Text = ""
-    SliderButton.AutoButtonColor = false
-    SliderButton.Parent = SliderFrame
-    
-    local SliderFill = Instance.new("Frame")
-    SliderFill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
-    SliderFill.BackgroundColor3 = Purple
-    SliderFill.BorderSizePixel = 0
-    SliderFill.Parent = SliderButton
-    
-    local function updateSlider()
-        local mousePos = UserInputService:GetMouseLocation()
-        local sliderPos = SliderButton.AbsolutePosition
-        local sliderSize = SliderButton.AbsoluteSize
-        local relativeX = math.clamp((mousePos.X - sliderPos.X) / sliderSize.X, 0, 1)
-        local value = math.floor(min + relativeX * (max - min))
-        SliderFill.Size = UDim2.new(relativeX, 0, 1, 0)
-        SliderLabel.Text = text .. ": " .. value
-        if callback then callback(value) end
-    end
-    
-    local dragging = false
-    
-    SliderButton.MouseButton1Down:Connect(function()
-        dragging = true
-        updateSlider()
-    end)
-    
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-            updateSlider()
-        end
-    end)
-    
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-    
-    return SliderFrame
-end
 
 local function CreateToggle(parent, text, callback)
     local ToggleFrame = Instance.new("Frame")
@@ -772,10 +660,7 @@ local function CreateToggle(parent, text, callback)
     end)
     
     updateVisual()
-    
-    return {
-        SetState = function(state) isOn = state updateVisual() end
-    }
+    return { SetState = function(state) isOn = state updateVisual() end }
 end
 
 local function CreateButton(parent, text, callback)
@@ -792,116 +677,27 @@ local function CreateButton(parent, text, callback)
     Button.MouseButton1Click:Connect(function()
         if callback then callback() end
     end)
-    
     return Button
 end
 
 -- ========================== HOME ==========================
 
-CreateSlider(Home, "Walk Speed", 16, 200, 16, function(value)
-    local char = LocalPlayer.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.WalkSpeed = value
-        end
-    end
-end)
-
-CreateSlider(Home, "Jump Power", 50, 300, 50, function(value)
-    local char = LocalPlayer.Character
-    if char then
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.JumpPower = value
-        end
-    end
-end)
-
 CreateToggle(Home, "Fly", function(state)
-    if state then
-        startFly()
-    else
-        stopFly()
-    end
+    if state then startFly() else stopFly() end
 end)
 
 CreateToggle(Home, "Noclip", function(state)
-    if state then
-        startNoclip()
-    else
-        stopNoclip()
-    end
+    if state then startNoclip() else stopNoclip() end
 end)
 
 -- ========================== COMBAT ==========================
 
-CreateButton(Combat, "Fling Murderer (1000)", function()
-    flingMurderer()
+CreateButton(Combat, "Fling Murderer", function()
+    flingPlayer(findMurderer())
 end)
 
-CreateButton(Combat, "Fling Sheriff (1000)", function()
-    flingSheriff()
-end)
-
-local PlayerDropdown = Instance.new("TextButton")
-PlayerDropdown.Size = UDim2.new(1, 0, 0, 40)
-PlayerDropdown.BackgroundColor3 = DarkBackground
-PlayerDropdown.BorderSizePixel = 0
-PlayerDropdown.Text = "Select Player to Fling"
-PlayerDropdown.TextColor3 = WhiteText
-PlayerDropdown.Font = Enum.Font.Gotham
-PlayerDropdown.TextSize = 13
-PlayerDropdown.TextXAlignment = Enum.TextXAlignment.Left
-PlayerDropdown.Parent = Combat
-
-local PlayerList = Instance.new("ScrollingFrame")
-PlayerList.Size = UDim2.new(1, 0, 0, 150)
-PlayerList.BackgroundColor3 = DarkBackground
-PlayerList.BorderSizePixel = 0
-PlayerList.Visible = false
-PlayerList.ScrollBarThickness = 2
-PlayerList.Parent = Combat
-
-local function updatePlayerList()
-    for _, child in ipairs(PlayerList:GetChildren()) do
-        if child:IsA("TextButton") then child:Destroy() end
-    end
-    
-    local yPos = 0
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local playerButton = Instance.new("TextButton")
-            playerButton.Size = UDim2.new(1, -10, 0, 35)
-            playerButton.Position = UDim2.new(0, 5, 0, yPos)
-            playerButton.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-            playerButton.BorderSizePixel = 0
-            playerButton.Text = player.Name
-            playerButton.TextColor3 = WhiteText
-            playerButton.Font = Enum.Font.Gotham
-            playerButton.TextSize = 13
-            playerButton.Parent = PlayerList
-            
-            playerButton.MouseButton1Click:Connect(function()
-                selectedFlingTarget = player
-                PlayerDropdown.Text = player.Name
-                PlayerList.Visible = false
-            end)
-            
-            yPos = yPos + 40
-        end
-    end
-    PlayerList.CanvasSize = UDim2.new(0, 0, 0, yPos)
-end
-
-PlayerDropdown.MouseButton1Click:Connect(function()
-    flingDropdownOpen = not flingDropdownOpen
-    PlayerList.Visible = flingDropdownOpen
-    if flingDropdownOpen then updatePlayerList() end
-end)
-
-CreateButton(Combat, "Fling Selected Player (1000)", function()
-    flingSelected()
+CreateButton(Combat, "Fling Sheriff", function()
+    flingPlayer(getSheriff())
 end)
 
 -- ========================== VISUALS ==========================
@@ -912,12 +708,45 @@ end)
 
 -- ========================== MISC ==========================
 
-CreateButton(Misc, "Pickup GunDrop", function()
-    pickupGunDrop()
+local coinFarmToggle = CreateToggle(Misc, "Auto Farm Coins", function(state)
+    if state then startCoinFarm() else stopCoinFarm() end
 end)
 
-local autoPickupToggle = CreateToggle(Misc, "Auto Pickup GunDrop", function(state)
-    if state then startAutoPickup() else stopAutoPickup() end
+-- Статистика
+local CoinStats = Instance.new("TextLabel")
+CoinStats.Size = UDim2.new(1, 0, 0, 60)
+CoinStats.BackgroundTransparency = 1
+CoinStats.Text = "Монеты: 0\nВ час: 0"
+CoinStats.TextColor3 = Gold
+CoinStats.Font = Enum.Font.GothamBold
+CoinStats.TextSize = 14
+CoinStats.TextXAlignment = Enum.TextXAlignment.Left
+CoinStats.Parent = Misc
+
+CreateButton(Misc, "Pickup GunDrop", function()
+    local gunDrop = findGunDropPart()
+    if gunDrop then
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if root then
+            local originalPos = root.CFrame
+            root.CFrame = CFrame.new(gunDrop.Position + Vector3.new(0, 3, 0))
+            task.wait(0.5)
+            root.Velocity = Vector3.new(0, 0, 0)
+            root.CFrame = originalPos
+            root.Velocity = Vector3.new(0, 0, 0)
+        end
+    end
+end)
+
+-- Обновление статистики монет
+task.spawn(function()
+    while true do
+        if coinFarmEnabled then
+            CoinStats.Text = string.format("Монеты: %d\nВ час: %d", coinsCollected, coinsPerHour)
+        end
+        task.wait(1)
+    end
 end)
 
 -- Drag
@@ -943,7 +772,6 @@ end)
 -- F - меню
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
-    
     if input.KeyCode == Enum.KeyCode.F then
         menuVisible = not menuVisible
         MainFrame.Visible = menuVisible
@@ -964,13 +792,9 @@ end)
 
 Players.PlayerRemoving:Connect(function(player)
     removeESP(player)
-    if rememberedSheriff == player then
-        rememberedSheriff = nil
-    end
-    if selectedFlingTarget == player then
-        selectedFlingTarget = nil
-        PlayerDropdown.Text = "Select Player to Fling"
-    end
+    if rememberedSheriff == player then rememberedSheriff = nil end
 end)
 
-print("SHOT HUB MM2 loaded! F - меню")
+print("SHOT HUB MM2 loaded!")
+print("F - меню")
+print("Auto Farm Coins - вкладка Misc")
