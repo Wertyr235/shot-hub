@@ -1,0 +1,399 @@
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local localPlayer = Players.LocalPlayer
+
+local function getCamera()
+	return Workspace.CurrentCamera or Workspace:FindFirstChildOfClass("Camera")
+end
+
+-- НАСТРОЙКИ ЧИТА
+local cheatsEnabled = false
+local AIM_SMOOTHNESS = 0.50
+local AIM_DISTANCE = 500
+local AIM_KEY = Enum.UserInputType.MouseButton2
+
+-- ЧЕРНЫЙ СПИСОК ИГРОКОВ
+local BLACKLIST = {
+    "gggoww3",
+    "qwerty235113",
+    "Player3",
+}
+
+local USE_WHITELIST = false
+local WHITELIST = {
+    -- "Target1",
+    -- "Target2",
+}
+
+local aimConnection = nil
+local isAiming = false
+local espObjects = {}
+local currentTarget = nil
+
+-- Проверка черного списка
+local function isBlacklisted(playerName)
+    for _, blacklistedName in ipairs(BLACKLIST) do
+        if playerName:lower() == blacklistedName:lower() then
+            return true
+        end
+    end
+    return false
+end
+
+-- Проверка белого списка
+local function isWhitelisted(playerName)
+    for _, whitelistedName in ipairs(WHITELIST) do
+        if playerName:lower() == whitelistedName:lower() then
+            return true
+        end
+    end
+    return false
+end
+
+-- Проверка можно ли наводиться
+local function canTarget(player)
+    if not player then return false end
+    
+    local playerName = player.Name
+    
+    if USE_WHITELIST then
+        if not isWhitelisted(playerName) then
+            return false
+        end
+    else
+        if isBlacklisted(playerName) then
+            return false
+        end
+    end
+    
+    return true
+end
+
+-- Проверка живого игрока
+local function isValidPlayer(model)
+	if not model or not model:IsA("Model") then return false end
+	if model == localPlayer.Character then return false end
+	
+	local player = Players:GetPlayerFromCharacter(model)
+	if not player then return false end
+	
+	if not canTarget(player) then
+		return false
+	end
+	
+	if player.Team and localPlayer.Team and player.Team == localPlayer.Team then 
+		return false 
+	end
+	
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	local head = model:FindFirstChild("Head")
+	
+	return humanoid and head and humanoid.Health > 0
+end
+
+-- Получение дистанции
+local function getDistanceToPlayer(target)
+	if not localPlayer.Character or not localPlayer.Character:FindFirstChild("HumanoidRootPart") then return math.huge end
+	if not target or not target:FindFirstChild("HumanoidRootPart") then return math.huge end
+	
+	return (localPlayer.Character.HumanoidRootPart.Position - target.HumanoidRootPart.Position).Magnitude
+end
+
+-- Очистка оверлеев
+local function clearBlindShotEsp()
+	for _, obj in pairs(espObjects) do
+		if obj.Box then obj.Box:Remove() end
+		if obj.Text then obj.Text:Remove() end
+		if obj.DistanceText then obj.DistanceText:Remove() end
+		if obj.HPBar then obj.HPBar:Remove() end
+		if obj.HPBarBackground then obj.HPBarBackground:Remove() end
+		if obj.HPText then obj.HPText:Remove() end
+	end
+	espObjects = {}
+end
+
+-- Обновление ESP
+local function updateBlindShotEsp()
+	local camera = getCamera()
+	if not camera or not cheatsEnabled then
+		clearBlindShotEsp()
+		return
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		local desc = player.Character
+		if desc and isValidPlayer(desc) then
+			local head = desc:FindFirstChild("Head")
+			local humanoid = desc:FindFirstChildOfClass("Humanoid")
+			
+			if head and humanoid then
+				local distance = getDistanceToPlayer(desc)
+				
+				if distance <= AIM_DISTANCE then
+					local screenPos, onScreen = camera:WorldToViewportPoint(head.Position)
+					
+					if onScreen then
+						if not espObjects[player] then
+							espObjects[player] = {
+								Box = Drawing.new("Square"),
+								Text = Drawing.new("Text"),
+								DistanceText = Drawing.new("Text"),
+								HPBarBackground = Drawing.new("Square"),
+								HPBar = Drawing.new("Square"),
+								HPText = Drawing.new("Text")
+							}
+						end
+						
+						local obj = espObjects[player]
+						
+						local boxSize = math.clamp((1000 / distance) * 2, 15, 120)
+						local boxHeight = boxSize * 1.5
+						
+						-- Позиция квадрата
+						local boxX = screenPos.X - (boxSize / 2)
+						local boxY = screenPos.Y - (boxSize * 0.3)
+						
+						-- Рамка
+						obj.Box.Visible = true
+						obj.Box.Color = Color3.fromRGB(255, 50, 50)
+						obj.Box.Thickness = 2
+						obj.Box.Filled = false
+						obj.Box.Size = Vector2.new(boxSize, boxHeight)
+						obj.Box.Position = Vector2.new(boxX, boxY)
+						
+						-- Имя игрока (над квадратом)
+						obj.Text.Visible = true
+						obj.Text.Color = Color3.fromRGB(255, 255, 255)
+						obj.Text.Size = 13
+						obj.Text.Center = true
+						obj.Text.Outline = true
+						obj.Text.Font = 2
+						obj.Text.Text = player.Name
+						obj.Text.Position = Vector2.new(screenPos.X, boxY - 15)
+						
+						-- HP и дистанция (под квадратом)
+						obj.DistanceText.Visible = true
+						obj.DistanceText.Color = Color3.fromRGB(0, 255, 0)
+						obj.DistanceText.Size = 12
+						obj.DistanceText.Center = true
+						obj.DistanceText.Outline = true
+						obj.DistanceText.Font = 2
+						obj.DistanceText.Text = string.format("%d studs", math.floor(distance))
+						obj.DistanceText.Position = Vector2.new(screenPos.X, boxY + boxHeight + 5)
+						
+						-- Вертикальная полоска HP (слева от квадрата)
+						local hpPercent = humanoid.Health / humanoid.MaxHealth
+						local barWidth = 4
+						local barHeight = boxHeight
+						local barX = boxX - 8 -- Слева от квадрата
+						local barY = boxY
+						
+						-- Фон полоски HP
+						obj.HPBarBackground.Visible = true
+						obj.HPBarBackground.Color = Color3.fromRGB(0, 0, 0)
+						obj.HPBarBackground.Thickness = 1
+						obj.HPBarBackground.Filled = true
+						obj.HPBarBackground.Size = Vector2.new(barWidth, barHeight)
+						obj.HPBarBackground.Position = Vector2.new(barX, barY)
+						
+						-- Сама полоска HP
+						obj.HPBar.Visible = true
+						obj.HPBar.Thickness = 1
+						obj.HPBar.Filled = true
+						obj.HPBar.Size = Vector2.new(barWidth, barHeight * hpPercent)
+						obj.HPBar.Position = Vector2.new(barX, barY + (barHeight - (barHeight * hpPercent)))
+						
+						-- Цвет полоски в зависимости от HP
+						if hpPercent > 0.75 then
+							obj.HPBar.Color = Color3.fromRGB(0, 255, 0) -- Зеленый
+						elseif hpPercent > 0.5 then
+							obj.HPBar.Color = Color3.fromRGB(255, 255, 0) -- Желтый
+						elseif hpPercent > 0.25 then
+							obj.HPBar.Color = Color3.fromRGB(255, 150, 0) -- Оранжевый
+						else
+							obj.HPBar.Color = Color3.fromRGB(255, 0, 0) -- Красный
+						end
+						
+						-- HP текст (сверху над квадратом, жирнее)
+						obj.HPText.Visible = true
+						obj.HPText.Color = Color3.fromRGB(255, 255, 255)
+						obj.HPText.Size = 16
+						obj.HPText.Center = true
+						obj.HPText.Outline = true
+						obj.HPText.Font = 2
+						obj.HPText.Text = string.format("HP: %d", math.floor(humanoid.Health))
+						obj.HPText.Position = Vector2.new(screenPos.X, boxY - 35)
+					else
+						if espObjects[player] then
+							espObjects[player].Box.Visible = false
+							espObjects[player].Text.Visible = false
+							espObjects[player].DistanceText.Visible = false
+							espObjects[player].HPBar.Visible = false
+							espObjects[player].HPBarBackground.Visible = false
+							espObjects[player].HPText.Visible = false
+						end
+					end
+				else
+					if espObjects[player] then
+						espObjects[player].Box:Remove()
+						espObjects[player].Text:Remove()
+						espObjects[player].DistanceText:Remove()
+						espObjects[player].HPBar:Remove()
+						espObjects[player].HPBarBackground:Remove()
+						espObjects[player].HPText:Remove()
+						espObjects[player] = nil
+					end
+				end
+			end
+		else
+			if espObjects[player] then
+				espObjects[player].Box:Remove()
+				espObjects[player].Text:Remove()
+				espObjects[player].DistanceText:Remove()
+				espObjects[player].HPBar:Remove()
+				espObjects[player].HPBarBackground:Remove()
+				espObjects[player].HPText:Remove()
+				espObjects[player] = nil
+			end
+		end
+	end
+end
+
+-- Поиск ближайшей цели
+local function getClosestTarget()
+	local closestTarget = nil
+	local shortestDistance = AIM_DISTANCE
+	
+	if not localPlayer.Character or not localPlayer.Character:FindFirstChild("HumanoidRootPart") then 
+		return nil 
+	end
+	
+	local myPosition = localPlayer.Character.HumanoidRootPart.Position
+	
+	for _, player in ipairs(Players:GetPlayers()) do
+		if canTarget(player) then
+			local desc = player.Character
+			if desc and isValidPlayer(desc) then
+				local rootPart = desc:FindFirstChild("HumanoidRootPart")
+				local head = desc:FindFirstChild("Head")
+				
+				if rootPart and head then
+					local distance3D = (myPosition - rootPart.Position).Magnitude
+					
+					if distance3D < shortestDistance then
+						closestTarget = desc
+						shortestDistance = distance3D
+					end
+				end
+			end
+		end
+	end
+	
+	return closestTarget
+end
+
+-- Плавное наведение
+local function smoothAim(target)
+	local camera = getCamera()
+	if not camera or not target or not target:FindFirstChild("Head") then return end
+	
+	local targetHead = target.Head
+	local targetScreenPos, onScreen = camera:WorldToViewportPoint(targetHead.Position)
+	
+	if not onScreen then
+		local targetCFrame = CFrame.new(camera.CFrame.Position, targetHead.Position)
+		camera.CFrame = camera.CFrame:Lerp(targetCFrame, AIM_SMOOTHNESS)
+		return
+	end
+	
+	local screenCenter = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+	local mouseDelta = Vector2.new(targetScreenPos.X, targetScreenPos.Y) - screenCenter
+	local smoothDelta = mouseDelta * AIM_SMOOTHNESS
+	
+	mousemoverel(smoothDelta.X, smoothDelta.Y)
+end
+
+-- Главный цикл
+local function startAimbotLoop()
+	if aimConnection then aimConnection:Disconnect() end
+	
+	aimConnection = RunService.RenderStepped:Connect(function()
+		updateBlindShotEsp()
+		
+		if not cheatsEnabled or not isAiming then 
+			currentTarget = nil
+			return 
+		end
+		
+		if not currentTarget or not isValidPlayer(currentTarget) or getDistanceToPlayer(currentTarget) > AIM_DISTANCE then
+			currentTarget = getClosestTarget()
+		end
+		
+		if currentTarget then
+			smoothAim(currentTarget)
+		end
+	end)
+end
+
+local function stopAimbotLoop()
+	if aimConnection then
+		aimConnection:Disconnect()
+		aimConnection = nil
+	end
+	clearBlindShotEsp()
+	currentTarget = nil
+end
+
+-- Включение/выключение
+local function toggleCheats()
+	cheatsEnabled = not cheatsEnabled
+	if cheatsEnabled then
+		print("--- ЧИТ ВКЛЮЧЕН ---")
+		print("E - ESP | ПКМ - Aimbot")
+		startAimbotLoop()
+	else
+		print("--- ЧИТ ОТКЛЮЧЕН ---")
+		stopAimbotLoop()
+	end
+end
+
+-- Обработчики клавиш
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == Enum.KeyCode.E then
+		toggleCheats()
+	end
+end)
+
+UserInputService.InputBegan:Connect(function(input)
+	if input.UserInputType == AIM_KEY then
+		isAiming = true
+		currentTarget = getClosestTarget()
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == AIM_KEY then
+		isAiming = false
+		currentTarget = nil
+	end
+end)
+
+-- Очистка при выходе
+Players.PlayerRemoving:Connect(function(player)
+	if espObjects[player] then
+		if espObjects[player].Box then espObjects[player].Box:Remove() end
+		if espObjects[player].Text then espObjects[player].Text:Remove() end
+		if espObjects[player].DistanceText then espObjects[player].DistanceText:Remove() end
+		if espObjects[player].HPBar then espObjects[player].HPBar:Remove() end
+		if espObjects[player].HPBarBackground then espObjects[player].HPBarBackground:Remove() end
+		if espObjects[player].HPText then espObjects[player].HPText:Remove() end
+		espObjects[player] = nil
+	end
+end)
+
+print("Скрипт загружен!")
+print("E - ESP | ПКМ - Aimbot")
