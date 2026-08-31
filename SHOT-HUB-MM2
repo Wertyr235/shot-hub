@@ -415,7 +415,7 @@ local function flingPlayer(targetPlayer)
     bav.AngularVelocity = Vector3.new(0, 99999, 0)
     bav.Parent = root
     
-    local speed = 1000
+    local speed = 30
     local distance = 6
     local startTime = os.clock()
     local flingTime = 3
